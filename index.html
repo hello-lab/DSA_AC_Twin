@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow State | Digital Twin</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-main: #ffffff;
+            --text-muted: #888888;
+            --accent-blue: #00d2ff;
+            --alert-red: #ff4b4b;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { margin-bottom: 5px; }
+        .status { color: var(--text-muted); margin-bottom: 30px; font-size: 0.9em; }
+        
+        button {
+            background-color: var(--accent-blue);
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1em;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0, 210, 255, 0.3);
+            transition: transform 0.1s;
+        }
+        button:active { transform: scale(0.95); }
+        button:disabled { background-color: #444; color: #888; box-shadow: none; cursor: not-allowed; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            width: 100%;
+            max-width: 500px;
+        }
+        .card {
+            background-color: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border: 1px solid #333;
+        }
+        .card.full-width { grid-column: span 2; text-align: center; }
+        .card.alert { border-color: var(--alert-red); box-shadow: 0 0 15px rgba(255, 75, 75, 0.2); }
+        
+        .label { font-size: 0.85em; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .value { font-size: 2em; font-weight: bold; }
+        .value span { font-size: 0.5em; font-weight: normal; color: var(--text-muted); }
+        
+        #ac-status { font-size: 1.2em; font-weight: bold; color: var(--accent-blue); }
+    </style>
+</head>
+<body>
+
+    <h1>Flow State</h1>
+    <div class="status" id="connection-status">Edge AI Disconnected</div>
+
+    <button id="connect-btn">Connect via Bluetooth</button>
+
+    <div class="grid">
+        <div class="card full-width" id="rul-card">
+            <div class="label">Remaining Useful Life</div>
+            <div class="value" id="val-rul">-- <span>hrs</span></div>
+            <div class="label" id="rul-alert" style="color: var(--alert-red); display: none; margin-top: 10px;">⚠️ Filter Replacement Required</div>
+        </div>
+
+        <div class="card full-width">
+            <div class="label">Compressor Status</div>
+            <div id="ac-status">WAITING FOR DATA</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Delta T</div>
+            <div class="value" id="val-dt">-- <span>°C</span></div>
+        </div>
+        <div class="card">
+            <div class="label">Room Humidity</div>
+            <div class="value" id="val-hum">-- <span>%</span></div>
+        </div>
+        <div class="card">
+            <div class="label">Return Air (In)</div>
+            <div class="value" id="val-tin">-- <span>°C</span></div>
+        </div>
+        <div class="card">
+            <div class="label">Supply Air (Out)</div>
+            <div class="value" id="val-tout">-- <span>°C</span></div>
+        </div>
+    </div>
+
+    <script>
+        // Exact UUIDs from your ESP32 Code
+        const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+        const CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+
+        let bluetoothDevice;
+        let flowStateCharacteristic;
+
+        const connectBtn = document.getElementById('connect-btn');
+        const statusText = document.getElementById('connection-status');
+        
+        // DOM Elements for Data
+        const elRul = document.getElementById('val-rul');
+        const elHum = document.getElementById('val-hum');
+        const elDt = document.getElementById('val-dt');
+        const elTin = document.getElementById('val-tin');
+        const elTout = document.getElementById('val-tout');
+        const elAcStatus = document.getElementById('ac-status');
+        const rulCard = document.getElementById('rul-card');
+        const rulAlert = document.getElementById('rul-alert');
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                statusText.innerText = 'Requesting Bluetooth Device...';
+                
+                // 1. Request connection to the specific ESP32 service
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: [SERVICE_UUID] }]
+                });
+
+                bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+                statusText.innerText = 'Connecting to GATT Server...';
+                const server = await bluetoothDevice.gatt.connect();
+
+                statusText.innerText = 'Getting Service...';
+                const service = await server.getPrimaryService(SERVICE_UUID);
+
+                statusText.innerText = 'Getting Characteristic...';
+                flowStateCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+                // 2. Subscribe to the notifications
+                await flowStateCharacteristic.startNotifications();
+                flowStateCharacteristic.addEventListener('characteristicvaluechanged', handleData);
+
+                statusText.innerText = 'Connected! Listening for telemetry...';
+                statusText.style.color = 'var(--accent-blue)';
+                connectBtn.style.display = 'none';
+
+            } catch (error) {
+                console.error(error);
+                statusText.innerText = 'Connection Failed: ' + error.message;
+            }
+        });
+
+        // 3. Handle incoming data
+        function handleData(event) {
+            // Decode the raw bytes into a string
+            const decoder = new TextDecoder('utf-8');
+            const jsonString = decoder.decode(event.target.value);
+            
+            try {
+                // Parse the JSON string we built in C++
+                const data = JSON.parse(jsonString);
+
+                // Update the UI
+                elRul.innerHTML = `${data.rul.toFixed(1)} <span>hrs</span>`;
+                elHum.innerHTML = `${data.hum.toFixed(1)} <span>%</span>`;
+                elDt.innerHTML = `${data.dt.toFixed(1)} <span>°C</span>`;
+                elTin.innerHTML = `${data.t_in.toFixed(1)} <span>°C</span>`;
+                elTout.innerHTML = `${data.t_out.toFixed(1)} <span>°C</span>`;
+
+                // Logic: AC Status
+                if (data.dt > 3.0) {
+                    elAcStatus.innerText = '🟢 ACTIVE (COOLING)';
+                    elAcStatus.style.color = 'var(--accent-blue)';
+                } else {
+                    elAcStatus.innerText = '⚪ STANDBY / FAN ONLY';
+                    elAcStatus.style.color = 'var(--text-muted)';
+                }
+
+                // Logic: Maintenance Alert
+                if (data.rul < 100.0) {
+                    rulCard.classList.add('alert');
+                    rulAlert.style.display = 'block';
+                } else {
+                    rulCard.classList.remove('alert');
+                    rulAlert.style.display = 'none';
+                }
+
+            } catch (e) {
+                console.error('Failed to parse JSON:', jsonString);
+            }
+        }
+
+        function onDisconnected() {
+            statusText.innerText = 'Device Disconnected. Please reconnect.';
+            statusText.style.color = 'var(--alert-red)';
+            connectBtn.style.display = 'block';
+            connectBtn.innerText = 'Reconnect';
+        }
+    </script>
+</body>
+</html>
