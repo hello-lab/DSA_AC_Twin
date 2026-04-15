@@ -131,7 +131,7 @@
                 statusText.innerText = 'Requesting Bluetooth Device...';
                 
                 // 1. Request connection to the specific ESP32 service
-                bluetoothDevice = await navigator.bluetooth.requestDevice({acceptALLDevices:True});
+                bluetoothDevice = await navigator.bluetooth.requestDevice({acceptALLDevices:true});
 
                 bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
